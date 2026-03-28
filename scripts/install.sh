@@ -193,13 +193,32 @@ step_header "Step 3/3 ── 建立 ClawRouter 帳號 & 啟動"
 echo -e "  你的 AI 助手使用 ${BOLD}ClawRouter${NC} 作為大腦。"
 echo -e "  一個帳號就能用 40+ 種 AI 模型（ChatGPT、Claude、Gemini...）"
 echo ""
-echo -e "  ${DIM}如果你已經有帳號，輸入現有的就好。沒有的話幫你建一個。${NC}"
+
+CR_REGISTER_MODE="if-missing"
+
+echo -e "  ${CYAN}1.${NC} 我是新用戶，幫我建立帳號"
+echo -e "  ${CYAN}2.${NC} 我已經有 ClawRouter 帳號"
+echo ""
+while true; do
+  ask_with_hint "選哪個？" "1 或 2"
+  read -r CR_ACCOUNT_CHOICE
+  case "$CR_ACCOUNT_CHOICE" in
+    1) CR_REGISTER_MODE="if-missing"; break ;;
+    2) CR_REGISTER_MODE="never"; break ;;
+    *) warn "請輸入 1 或 2" ;;
+  esac
+done
+
 echo ""
 
 while true; do
   # ── Ask credentials ──
   while true; do
-    ask_with_hint "取一個帳號名稱" "英文或數字，例如 alice123"
+    if [ "$CR_REGISTER_MODE" = "never" ]; then
+      ask_with_hint "你的 ClawRouter 帳號" ""
+    else
+      ask_with_hint "取一個帳號名稱" "英文或數字，例如 alice123"
+    fi
     read -r CR_USERNAME
     CR_USERNAME=$(echo "$CR_USERNAME" | xargs)
     if [ -n "$CR_USERNAME" ]; then
@@ -209,8 +228,9 @@ while true; do
   done
 
   while true; do
-    ask_with_hint "設定密碼" "至少 8 個字，例如 mypassword123"
-    read -r CR_PASSWORD
+    ask_with_hint "密碼" "至少 8 個字（輸入時不會顯示，是正常的）"
+    read -rs CR_PASSWORD
+    echo ""
     if [ ${#CR_PASSWORD} -ge 8 ]; then
       break
     fi
@@ -218,7 +238,11 @@ while true; do
   done
 
   echo ""
-  info "正在建立帳號並取得 API Key..."
+  if [ "$CR_REGISTER_MODE" = "never" ]; then
+    info "正在登入並取得 API Key..."
+  else
+    info "正在建立帳號並取得 API Key..."
+  fi
 
   # Download bootstrap script
   TMPDIR=$(mktemp -d)
@@ -249,16 +273,17 @@ while true; do
     --base-url "$CLAWROUTER_BASE_URL" \
     --username "$CR_USERNAME" \
     --password "$CR_PASSWORD" \
-    --register-mode if-missing \
+    --register-mode "$CR_REGISTER_MODE" \
     --aff-code "$CLAWROUTER_AFF_CODE" \
     --with-access-token false \
     --token-name "openclaw-$(date +%s)" \
     --output json 2>&1)
 
   if [ $? -ne 0 ]; then
-    fail "帳號建立失敗"
+    fail "失敗"
     echo ""
     echo -e "  ${DIM}可能的原因：${NC}"
+    echo -e "  ${DIM}• 帳號或密碼錯誤${NC}"
     echo -e "  ${DIM}• 帳號名稱已被使用 → 換一個名字${NC}"
     echo -e "  ${DIM}• ClawRouter 暫時無法連線 → 稍後重試${NC}"
     echo ""
@@ -266,7 +291,7 @@ while true; do
     echo "$BS_RESULT" | head -5
     rm -rf "$TMPDIR"
     echo ""
-    warn "按 Enter 重新輸入帳號密碼，或 Ctrl+C 離開"
+    warn "按 Enter 重新輸入，或 Ctrl+C 離開"
     read -r
     echo ""
     continue
@@ -274,7 +299,7 @@ while true; do
 
   MODEL_API_KEY=$(echo "$BS_RESULT" | node -e "
     let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
-      try{const r=JSON.parse(d);process.stdout.write(r.api_token?.key||'')}
+      try{const r=JSON.parse(d);process.stdout.write(r.api_token?.api_key||r.api_token?.key||'')}
       catch{process.exit(1)}
     })
   " 2>/dev/null)
@@ -282,17 +307,18 @@ while true; do
   if [ -z "$MODEL_API_KEY" ]; then
     fail "無法取得 API Key"
     echo ""
-    echo -e "  ${DIM}帳號可能已建立但 token 取得失敗${NC}"
+    echo -e "  ${DIM}Bootstrap 回傳內容：${NC}"
+    echo "$BS_RESULT" | head -20
     rm -rf "$TMPDIR"
     echo ""
-    warn "按 Enter 用同一組帳密重試，或 Ctrl+C 離開"
+    warn "按 Enter 重試，或 Ctrl+C 離開"
     read -r
     echo ""
     continue
   fi
 
   rm -rf "$TMPDIR"
-  ok "帳號建立成功！"
+  ok "帳號就緒！"
   ok "API Key: ${MODEL_API_KEY:0:12}..."
   break
 done
