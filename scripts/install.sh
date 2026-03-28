@@ -197,90 +197,105 @@ echo -e "  ${DIM}如果你已經有帳號，輸入現有的就好。沒有的話
 echo ""
 
 while true; do
-  ask_with_hint "取一個帳號名稱" "英文或數字，例如 alice123"
-  read -r CR_USERNAME
-  CR_USERNAME=$(echo "$CR_USERNAME" | xargs)
-  if [ -n "$CR_USERNAME" ]; then
-    break
+  # ── Ask credentials ──
+  while true; do
+    ask_with_hint "取一個帳號名稱" "英文或數字，例如 alice123"
+    read -r CR_USERNAME
+    CR_USERNAME=$(echo "$CR_USERNAME" | xargs)
+    if [ -n "$CR_USERNAME" ]; then
+      break
+    fi
+    warn "不能空白"
+  done
+
+  while true; do
+    ask_with_hint "設定密碼" "至少 8 個字，例如 mypassword123"
+    read -r CR_PASSWORD
+    if [ ${#CR_PASSWORD} -ge 8 ]; then
+      break
+    fi
+    warn "密碼至少 8 個字"
+  done
+
+  echo ""
+  info "正在建立帳號並取得 API Key..."
+
+  # Download bootstrap script
+  TMPDIR=$(mktemp -d)
+  BOOTSTRAP_OK=false
+
+  if command -v git &>/dev/null; then
+    git clone --depth 1 "$SKILL_REPO" "$TMPDIR/repo" >/dev/null 2>&1 && \
+      BOOTSTRAP_OK=true || true
   fi
-  warn "不能空白"
-done
 
-while true; do
-  ask_with_hint "設定密碼" "至少 8 個字，例如 mypassword123"
-  read -r CR_PASSWORD
-  if [ ${#CR_PASSWORD} -ge 8 ]; then
-    break
+  if [ "$BOOTSTRAP_OK" = true ] && \
+     [ -f "$TMPDIR/repo/clawrouter-skill/scripts/clawrouter-account-bootstrap.mjs" ]; then
+    BS_SCRIPT="$TMPDIR/repo/clawrouter-skill/scripts/clawrouter-account-bootstrap.mjs"
+  else
+    BS_SCRIPT="$TMPDIR/bootstrap.mjs"
+    curl -fsSL "$BOOTSTRAP_RAW" \
+      -o "$BS_SCRIPT" 2>/dev/null || {
+        fail "無法下載設定工具，請檢查網路連線"
+        rm -rf "$TMPDIR"
+        echo ""
+        warn "按 Enter 重試，或 Ctrl+C 離開"
+        read -r
+        continue
+      }
   fi
-  warn "密碼至少 8 個字"
-done
 
-echo ""
-info "正在建立帳號並取得 API Key..."
+  BS_RESULT=$(node "$BS_SCRIPT" bootstrap \
+    --base-url "$CLAWROUTER_BASE_URL" \
+    --username "$CR_USERNAME" \
+    --password "$CR_PASSWORD" \
+    --register-mode if-missing \
+    --aff-code "$CLAWROUTER_AFF_CODE" \
+    --with-access-token false \
+    --token-name "openclaw-$(date +%s)" \
+    --output json 2>&1)
 
-# Download bootstrap script
-TMPDIR=$(mktemp -d)
-BOOTSTRAP_OK=false
-
-if command -v git &>/dev/null; then
-  git clone --depth 1 "$SKILL_REPO" "$TMPDIR/repo" >/dev/null 2>&1 && \
-    BOOTSTRAP_OK=true || true
-fi
-
-if [ "$BOOTSTRAP_OK" = true ] && \
-   [ -f "$TMPDIR/repo/clawrouter-skill/scripts/clawrouter-account-bootstrap.mjs" ]; then
-  BS_SCRIPT="$TMPDIR/repo/clawrouter-skill/scripts/clawrouter-account-bootstrap.mjs"
-else
-  BS_SCRIPT="$TMPDIR/bootstrap.mjs"
-  curl -fsSL "$BOOTSTRAP_RAW" \
-    -o "$BS_SCRIPT" 2>/dev/null || {
-      fail "無法下載設定工具，請檢查網路連線"
-      exit 1
-    }
-fi
-
-BS_RESULT=$(node "$BS_SCRIPT" bootstrap \
-  --base-url "$CLAWROUTER_BASE_URL" \
-  --username "$CR_USERNAME" \
-  --password "$CR_PASSWORD" \
-  --register-mode if-missing \
-  --aff-code "$CLAWROUTER_AFF_CODE" \
-  --with-access-token false \
-  --token-name "openclaw-$(date +%s)" \
-  --output json 2>&1) || {
+  if [ $? -ne 0 ]; then
     fail "帳號建立失敗"
     echo ""
     echo -e "  ${DIM}可能的原因：${NC}"
-    echo -e "  ${DIM}• 帳號名稱已被使用 → 換一個名字重跑${NC}"
-    echo -e "  ${DIM}• 網路問題 → 請確認可以連到外網${NC}"
+    echo -e "  ${DIM}• 帳號名稱已被使用 → 換一個名字${NC}"
+    echo -e "  ${DIM}• ClawRouter 暫時無法連線 → 稍後重試${NC}"
     echo ""
     echo -e "  ${DIM}錯誤訊息：${NC}"
     echo "$BS_RESULT" | head -5
     rm -rf "$TMPDIR"
-    exit 1
-  }
+    echo ""
+    warn "按 Enter 重新輸入帳號密碼，或 Ctrl+C 離開"
+    read -r
+    echo ""
+    continue
+  fi
 
-MODEL_API_KEY=$(echo "$BS_RESULT" | node -e "
-  let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
-    try{const r=JSON.parse(d);process.stdout.write(r.api_token?.key||'')}
-    catch{process.exit(1)}
-  })
-" 2>/dev/null) || {
-  fail "無法取得 API Key，請聯繫講師協助"
+  MODEL_API_KEY=$(echo "$BS_RESULT" | node -e "
+    let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
+      try{const r=JSON.parse(d);process.stdout.write(r.api_token?.key||'')}
+      catch{process.exit(1)}
+    })
+  " 2>/dev/null)
+
+  if [ -z "$MODEL_API_KEY" ]; then
+    fail "無法取得 API Key"
+    echo ""
+    echo -e "  ${DIM}帳號可能已建立但 token 取得失敗${NC}"
+    rm -rf "$TMPDIR"
+    echo ""
+    warn "按 Enter 用同一組帳密重試，或 Ctrl+C 離開"
+    read -r
+    echo ""
+    continue
+  fi
+
   rm -rf "$TMPDIR"
-  exit 1
-}
-
-if [ -z "$MODEL_API_KEY" ]; then
-  fail "API Key 為空，請聯繫講師協助"
-  rm -rf "$TMPDIR"
-  exit 1
-fi
-
-rm -rf "$TMPDIR"
-
-ok "帳號建立成功！"
-ok "API Key: ${MODEL_API_KEY:0:12}..."
+  ok "帳號建立成功！"
+  ok "API Key: ${MODEL_API_KEY:0:12}..."
+  break
+done
 
 # ── Write config ──
 info "正在寫入設定..."
