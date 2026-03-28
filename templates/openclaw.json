@@ -1,0 +1,30 @@
+{
+  "models": {
+    "default": "claude-sonnet-4-20250514",
+    "providers": {
+      "clawrouter": {
+        "type": "openai-compatible",
+        "baseURL": "https://clawrouter.com/v1",
+        "apiKey": "sk-REPLACE_ME",
+        "models": ["*"]
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "token": "REPLACE_WITH_BOT_TOKEN",
+      "allowFrom": ["REPLACE_WITH_USER_ID"],
+      "groups": {
+        "*": {
+          "requireMention": true
+        }
+      }
+    }
+  },
+  "messages": {
+    "groupChat": {
+      "mentionPatterns": ["@openclaw"]
+    }
+  }
+}
