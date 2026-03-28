@@ -15,7 +15,7 @@
 在你的 EC2 主機上，跑這一行：
 
 ```bash
-curl -fsSL https://install.clawrouter.com | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/RouteClaw/openclaw-clawrouter/main/scripts/install.sh)
 ```
 
 安裝精靈會引導你完成所有設定。不需要打任何程式碼。

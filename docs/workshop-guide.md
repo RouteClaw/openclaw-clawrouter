@@ -45,7 +45,7 @@
 2. 隨便傳一則訊息（例如傳 `hi`）
 3. 它會回覆你的資訊，其中 **Id** 那行是一串數字
 
-> 💡 ID 就是那串數字，例如 `514234444`
+> 💡 ID 就是那串數字，例如 `123456789`
 >
 > **把這串數字也記下來**
 
@@ -96,7 +96,7 @@
 在剛才打開的黑色視窗中，**複製貼上下面這行指令**，然後按 Enter：
 
 ```
-curl -fsSL https://install.clawrouter.com | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/RouteClaw/openclaw-clawrouter/main/scripts/install.sh)
 ```
 
 > 💡 複製方法：用滑鼠選取上面的指令 → Ctrl+C（複製）→ 在黑色視窗裡 Ctrl+Shift+V（貼上）→ Enter

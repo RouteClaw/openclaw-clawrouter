@@ -3,7 +3,7 @@
 #  OpenClaw + ClawRouter — One-click installer
 #  Designed for beginners. Zero programming knowledge required.
 #
-#  Usage:  curl -fsSL https://install.clawrouter.com | bash
+#  Usage:  bash <(curl -fsSL https://raw.githubusercontent.com/RouteClaw/openclaw-clawrouter/main/scripts/install.sh)
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -55,9 +55,11 @@ press_enter() {
 
 # ── Globals ─────────────────────────────────────────────────
 CLAWROUTER_BASE_URL="${CLAWROUTER_BASE_URL:-https://clawrouter.com}"
-CLAWROUTER_AFF_CODE="${CLAWROUTER_AFF_CODE:-claw-workshop}"
+CLAWROUTER_AFF_CODE="${CLAWROUTER_AFF_CODE:-p1jZ}"
 OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
-SKILL_REPO="https://github.com/RouteClaw/clawrouter-skill"
+SKILL_REPO="https://github.com/RouteClaw/openclaw-clawrouter"
+SKILL_ORIGIN_REPO="https://github.com/RouteClaw/clawrouter-skill"
+BOOTSTRAP_RAW="https://raw.githubusercontent.com/RouteClaw/openclaw-clawrouter/main/clawrouter-skill/scripts/clawrouter-account-bootstrap.mjs"
 
 # ═════════════════════════════════════════════════════════════
 #  STEP 1 — 自動安裝基礎環境
@@ -170,7 +172,7 @@ echo -e "  ${CYAN}3.${NC} 它會回覆你的 ID（一串數字）"
 echo ""
 
 while true; do
-  ask_with_hint "貼上你的 Telegram ID" "純數字，例如 514234444"
+  ask_with_hint "貼上你的 Telegram ID" "純數字，例如 123456789"
   read -r TG_OWNER_ID
   TG_OWNER_ID=$(echo "$TG_OWNER_ID" | xargs)
 
@@ -178,7 +180,7 @@ while true; do
     ok "ID 格式正確"
     break
   else
-    warn "應該是純數字（例如 514234444）"
+    warn "應該是純數字（例如 123456789）"
     echo ""
   fi
 done
@@ -230,8 +232,7 @@ if [ "$BOOTSTRAP_OK" = true ] && \
   BS_SCRIPT="$TMPDIR/repo/clawrouter-skill/scripts/clawrouter-account-bootstrap.mjs"
 else
   BS_SCRIPT="$TMPDIR/bootstrap.mjs"
-  curl -fsSL \
-    "https://raw.githubusercontent.com/RouteClaw/clawrouter-skill/master/clawrouter-skill/scripts/clawrouter-account-bootstrap.mjs" \
+  curl -fsSL "$BOOTSTRAP_RAW" \
     -o "$BS_SCRIPT" 2>/dev/null || {
       fail "無法下載設定工具，請檢查網路連線"
       exit 1
@@ -333,13 +334,13 @@ SOULEOF
 
 ok "AI 人格設定完成"
 
-# ── Install ClawRouter skill ──
+# ── Install ClawRouter skill（from canonical repo）──
 if command -v git &>/dev/null; then
   TMPSKILL=$(mktemp -d)
-  git clone --depth 1 "$SKILL_REPO" "$TMPSKILL" >/dev/null 2>&1 && \
+  git clone --depth 1 "$SKILL_ORIGIN_REPO" "$TMPSKILL" >/dev/null 2>&1 && \
     cp -r "$TMPSKILL/clawrouter-skill" "$OPENCLAW_HOME/skills/" >/dev/null 2>&1 && \
     ok "ClawRouter Skill 已安裝" || \
-    info "Skill 安裝跳過（不影響使用）"
+    info "Skill 安裝跳過（不影響使用，待 clawrouter-skill repo 公開後可手動安裝）"
   rm -rf "$TMPSKILL"
 fi
 
