@@ -367,7 +367,7 @@ SKILL_LINK="$OPENCLAW_HOME/skills/clawrouter-skill"
 
 if command -v git &>/dev/null; then
   if [ -d "$SKILL_REPO_DIR/.git" ]; then
-    cd "$SKILL_REPO_DIR" && git pull --ff-only >/dev/null 2>&1 && cd - >/dev/null
+    (cd "$SKILL_REPO_DIR" && git pull --ff-only >/dev/null 2>&1) || true
     ok "ClawRouter Skill 已更新"
   else
     rm -rf "$SKILL_REPO_DIR" "$SKILL_LINK"
@@ -379,24 +379,23 @@ if command -v git &>/dev/null; then
 
   # 設定每日自動更新 skill
   CRON_CMD="cd $SKILL_REPO_DIR && git pull --ff-only >/dev/null 2>&1"
-  (crontab -l 2>/dev/null | grep -v "clawrouter-skill-repo" ; echo "0 4 * * * $CRON_CMD") | crontab -
-  ok "Skill 每日自動更新已設定（每天凌晨 4 點）"
+  EXISTING_CRON=$(crontab -l 2>/dev/null || echo "")
+  FILTERED_CRON=$(echo "$EXISTING_CRON" | grep -v "clawrouter-skill-repo" || true)
+  echo "${FILTERED_CRON}
+0 4 * * * $CRON_CMD" | crontab - 2>/dev/null && \
+    ok "Skill 每日自動更新已設定（每天凌晨 4 點）" || true
 fi
 
-# 讓 OpenClaw 驗證設定
-info "正在驗證設定..."
-openclaw doctor --fix 2>&1 | grep -E "✓|✗|warn|error|ok|fail|Approved|token|Gateway" | head -10 || true
-
-# 設定 gateway mode 和 auth（如果 doctor 沒處理）
+# 設定 gateway
 openclaw config set gateway.mode local 2>/dev/null || true
 
 # 安裝 gateway service
 info "正在安裝 Gateway 服務..."
-openclaw gateway install 2>/dev/null || true
+yes | openclaw gateway install 2>/dev/null || true
 
 # 啟動
 info "正在啟動 Gateway..."
-openclaw gateway start 2>/dev/null &
+openclaw gateway start 2>/dev/null || openclaw gateway 2>/dev/null &
 sleep 5
 
 # 檢查
