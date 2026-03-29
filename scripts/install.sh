@@ -288,12 +288,11 @@ cat > "$OPENCLAW_HOME/openclaw.json" << CFGEOF
         "apiKey": "$MODEL_API_KEY",
         "api": "openai-completions",
         "models": [
-          {
-            "id": "gemini-2.5-flash",
-            "name": "Gemini Flash",
-            "contextWindow": 1000000,
-            "maxTokens": 8192
-          }
+          { "id": "gemini-2.5-flash", "name": "Gemini Flash", "contextWindow": 1000000, "maxTokens": 8192 },
+          { "id": "gpt-4o", "name": "GPT-4o", "contextWindow": 128000, "maxTokens": 16384 },
+          { "id": "claude-sonnet-4-20250514", "name": "Claude Sonnet", "contextWindow": 200000, "maxTokens": 8192 },
+          { "id": "deepseek-chat", "name": "DeepSeek Chat", "contextWindow": 128000, "maxTokens": 8192 },
+          { "id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "contextWindow": 128000, "maxTokens": 16384 }
         ]
       }
     }
@@ -304,7 +303,11 @@ cat > "$OPENCLAW_HOME/openclaw.json" << CFGEOF
         "primary": "clawrouter/gemini-2.5-flash"
       },
       "models": {
-        "clawrouter/gemini-2.5-flash": {}
+        "clawrouter/gemini-2.5-flash": {},
+        "clawrouter/gpt-4o": {},
+        "clawrouter/claude-sonnet-4-20250514": {},
+        "clawrouter/deepseek-chat": {},
+        "clawrouter/gpt-4.1-mini": {}
       },
       "workspace": "$OPENCLAW_HOME/workspace"
     }
@@ -358,13 +361,26 @@ SOULEOF
 
 ok "AI 人格設定完成"
 
-# 安裝 ClawRouter skill
+# 安裝 ClawRouter skill（用 git clone，方便自動更新）
+SKILL_REPO_DIR="$OPENCLAW_HOME/skills/_clawrouter-skill-repo"
+SKILL_LINK="$OPENCLAW_HOME/skills/clawrouter-skill"
+
 if command -v git &>/dev/null; then
-  TMPSKILL=$(mktemp -d)
-  git clone --depth 1 "$SKILL_ORIGIN_REPO" "$TMPSKILL" >/dev/null 2>&1 && \
-    cp -r "$TMPSKILL/clawrouter-skill" "$OPENCLAW_HOME/skills/" >/dev/null 2>&1 && \
-    ok "ClawRouter Skill 已安裝" || true
-  rm -rf "$TMPSKILL"
+  if [ -d "$SKILL_REPO_DIR/.git" ]; then
+    cd "$SKILL_REPO_DIR" && git pull --ff-only >/dev/null 2>&1 && cd - >/dev/null
+    ok "ClawRouter Skill 已更新"
+  else
+    rm -rf "$SKILL_REPO_DIR" "$SKILL_LINK"
+    git clone --depth 1 "$SKILL_ORIGIN_REPO" "$SKILL_REPO_DIR" >/dev/null 2>&1 && \
+      ln -sf "$SKILL_REPO_DIR/clawrouter-skill" "$SKILL_LINK" && \
+      ok "ClawRouter Skill 已安裝" || \
+      warn "Skill 安裝跳過（不影響使用）"
+  fi
+
+  # 設定每日自動更新 skill
+  CRON_CMD="cd $SKILL_REPO_DIR && git pull --ff-only >/dev/null 2>&1"
+  (crontab -l 2>/dev/null | grep -v "clawrouter-skill-repo" ; echo "0 4 * * * $CRON_CMD") | crontab -
+  ok "Skill 每日自動更新已設定（每天凌晨 4 點）"
 fi
 
 # 讓 OpenClaw 驗證設定

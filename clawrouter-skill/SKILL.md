@@ -1,8 +1,8 @@
 ---
 name: clawrouter-skill
-description: Automate ClawRouter account bootstrap and self-service flows through the existing backend APIs. Use when the task is to probe `/api/status`, register a user, log in, generate a management access token, create a user API key token, or create checkout links with the current payment providers without browser automation. Prefer this skill before changing backend code.
+description: ClawRouter account management and model operations. Use when the task involves signup, login, API tokens, payment links, listing available models, switching models, checking current model, or checking account balance. Also use when the user asks about available AI models, wants to change models, or asks about their remaining credits.
 metadata:
-  short-description: ClawRouter CLI bootstrap for signup, login, tokens, and checkout links
+  short-description: ClawRouter model management, account bootstrap, and self-service operations
 ---
 
 # ClawRouter Account Bootstrap
@@ -22,6 +22,10 @@ The bundled script is zero-dependency beyond Node.js. It maintains the session c
 
 ## Use This Skill When
 
+- The user asks about available models, wants to list models, or says "有什麼模型", "支援哪些模型", "what models"
+- The user wants to switch/change the current model, or says "切換模型", "換模型", "use model X"
+- The user asks what model is currently active, or says "現在用什麼模型", "current model"
+- The user asks about balance, credits, or quota, or says "餘額", "額度", "how much credit"
 - The user wants AI to complete ClawRouter signup or login from a command or script.
 - The user wants a reusable bootstrap flow for account creation plus API key issuance.
 - The task is to create payment checkout links through existing `epay`, `stripe`, or `creem` routes.
@@ -130,42 +134,119 @@ After bootstrapping an account and obtaining an API key, configure OpenClaw to u
 
 ### Auto-Configuration
 
-The installer script handles this automatically. For manual setup, edit `~/.openclaw/openclaw.json`:
+The installer script handles this automatically. For manual setup, edit `~/.openclaw/openclaw.json`. Important: `baseUrl` must include `/v1`.
 
 ```json
 {
   "models": {
-    "default": "claude-sonnet-4-20250514",
+    "mode": "merge",
     "providers": {
       "clawrouter": {
-        "type": "openai-compatible",
-        "baseURL": "https://clawrouter.com/v1",
+        "baseUrl": "https://clawrouter.com/v1",
         "apiKey": "sk-YOUR_KEY_HERE",
-        "models": ["*"]
+        "api": "openai-completions",
+        "models": [
+          { "id": "gemini-2.5-flash", "name": "Gemini Flash", "contextWindow": 1000000, "maxTokens": 8192 }
+        ]
       }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": { "primary": "clawrouter/gemini-2.5-flash" }
     }
   }
 }
 ```
 
-### Model Switching via Telegram
+## Model Management (Use This When the User Asks About Models)
 
-Once running, users can switch models with the `/model` command:
+### List available models
 
-- `/model claude-sonnet-4-20250514` — Anthropic Sonnet
-- `/model gpt-4o` — OpenAI GPT-4o
-- `/model deepseek-chat` — DeepSeek (cheapest)
-- `/model gemini-2.5-flash` — Google Gemini Flash
-
-### Checking Balance and Usage
-
-Use the bootstrap script to check account status:
+When the user asks "what models are available", "有什麼模型", "支援哪些模型", run:
 
 ```bash
-node scripts/clawrouter-account-bootstrap.mjs status \
-  --base-url https://clawrouter.com \
-  --output pretty
+curl -s https://clawrouter.com/v1/models \
+  -H "Authorization: Bearer $(node -e "const c=require('$HOME/.openclaw/openclaw.json');console.log(c.models.providers.clawrouter.apiKey)")" \
+  | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const m=JSON.parse(d).data;m.forEach(x=>console.log(x.id))})"
 ```
+
+Present the results in a clean list grouped by provider:
+- **Anthropic**: claude-opus-4-6, claude-sonnet-4-20250514, claude-haiku-4-5-20251001
+- **OpenAI**: gpt-5, gpt-4o, gpt-4.1-mini
+- **Google**: gemini-2.5-flash, gemini-3.1-pro-preview
+- **DeepSeek**: deepseek-chat (cheapest option)
+
+### Check current model
+
+When the user asks "what model am I using", "現在用什麼模型", read the config:
+
+```bash
+node -e "const c=require('$HOME/.openclaw/openclaw.json');console.log('Current model:', c.agents.defaults.model.primary)"
+```
+
+### Switch model
+
+When the user asks to switch models, "切換到 X", "用 X 模型":
+
+1. First verify the requested model exists on ClawRouter (run the list command above)
+2. Update the config:
+
+```bash
+node -e "
+const fs=require('fs');
+const f=process.env.HOME+'/.openclaw/openclaw.json';
+const c=JSON.parse(fs.readFileSync(f,'utf8'));
+const MODEL_ID='TARGET_MODEL_ID';
+// Add model to provider if not present
+const models=c.models.providers.clawrouter.models;
+if(!models.find(m=>m.id===MODEL_ID)){
+  models.push({id:MODEL_ID,name:MODEL_ID,contextWindow:200000,maxTokens:8192});
+}
+// Set as primary
+c.agents.defaults.model.primary='clawrouter/'+MODEL_ID;
+c.agents.defaults.models={'clawrouter/'+MODEL_ID:{}};
+fs.writeFileSync(f,JSON.stringify(c,null,2));
+console.log('Switched to '+MODEL_ID);
+"
+```
+
+Replace `TARGET_MODEL_ID` with the actual model ID. After switching, tell the user the change will take effect after gateway reload. OpenClaw hot-reloads model config changes automatically.
+
+### Check balance and usage
+
+When the user asks "how much credit do I have", "還有多少額度", "餘額":
+
+```bash
+node -e "
+const f=process.env.HOME+'/.openclaw/openclaw.json';
+const c=require(f);
+const key=c.models.providers.clawrouter.apiKey;
+fetch('https://clawrouter.com/api/user/self',{headers:{Authorization:key,'New-API-User':'0'}})
+  .then(r=>r.json())
+  .then(d=>{
+    if(d.data){
+      const q=d.data.quota||0;
+      const u=d.data.used_quota||0;
+      const r=q-u;
+      console.log('Total quota: $'+(q/500000).toFixed(2));
+      console.log('Used: $'+(u/500000).toFixed(2));
+      console.log('Remaining: $'+(r/500000).toFixed(2));
+    } else console.log('Unable to fetch balance');
+  }).catch(e=>console.log('Error:',e.message));
+"
+```
+
+Note: The quota values from the API are in internal units. Divide by 500000 to get approximate USD value.
+
+### Model Switching via Telegram
+
+Users can also use OpenClaw's built-in `/model` command if models are pre-registered in the config. The installer pre-loads these models:
+
+- `clawrouter/gemini-2.5-flash` — Google Gemini Flash (fast, cheap)
+- `clawrouter/gpt-4o` — OpenAI GPT-4o
+- `clawrouter/claude-sonnet-4-20250514` — Anthropic Claude Sonnet
+- `clawrouter/deepseek-chat` — DeepSeek (cheapest)
 
 ### Top-up via Telegram (Planned)
 
