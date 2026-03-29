@@ -46,9 +46,15 @@ ask_with_hint() {
 # ── Globals ─────────────────────────────────────────────────
 CLAWROUTER_BASE_URL="${CLAWROUTER_BASE_URL:-https://clawrouter.com}"
 CLAWROUTER_AFF_CODE="${CLAWROUTER_AFF_CODE:-p1jZ}"
+OPENCLAW_HOME="${HOME}/.openclaw"
 SKILL_REPO="https://github.com/RouteClaw/openclaw-clawrouter"
 SKILL_ORIGIN_REPO="https://github.com/RouteClaw/clawrouter-skill"
 BOOTSTRAP_RAW="https://raw.githubusercontent.com/RouteClaw/openclaw-clawrouter/main/clawrouter-skill/scripts/clawrouter-account-bootstrap.mjs"
+
+# ── Fix IPv6 issues on EC2 ──────────────────────────────────
+sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
+sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1 || true
+export NODE_OPTIONS="--dns-result-order=ipv4first"
 
 # ═════════════════════════════════════════════════════════════
 #  STEP 1 — 安裝基礎環境（全自動）
@@ -205,7 +211,6 @@ while true; do
   BS_SCRIPT="$TMPDIR/bootstrap.mjs"
 
   curl -fsSL "$BOOTSTRAP_RAW" -o "$BS_SCRIPT" 2>/dev/null || {
-    # Fallback: try git clone
     git clone --depth 1 "$SKILL_REPO" "$TMPDIR/repo" >/dev/null 2>&1 && \
       cp "$TMPDIR/repo/clawrouter-skill/scripts/clawrouter-account-bootstrap.mjs" "$BS_SCRIPT" || {
         fail "無法下載設定工具，請檢查網路"
@@ -259,32 +264,102 @@ while true; do
 done
 
 # ═════════════════════════════════════════════════════════════
-#  STEP 4 — 交給 OpenClaw 設定 + 啟動
+#  STEP 4 — 寫設定 + 啟動
 # ═════════════════════════════════════════════════════════════
 step_header "Step 4/4 ── 設定 & 啟動"
 
-info "正在交給 OpenClaw 處理設定..."
+info "正在寫入設定..."
 
-# 用 openclaw 自己的 CLI 寫入設定
-openclaw config set channels.telegram.botToken "$TG_BOT_TOKEN" 2>/dev/null || true
-openclaw config set channels.telegram.dmPolicy "allowlist" 2>/dev/null || true
-openclaw config set channels.telegram.allowFrom "$TG_OWNER_ID" 2>/dev/null || true
+# 先跑 openclaw onboard 的最小初始化（建目錄結構）
+mkdir -p "$OPENCLAW_HOME/workspace"
+mkdir -p "$OPENCLAW_HOME/agents/main/sessions"
+mkdir -p "$OPENCLAW_HOME/skills"
+mkdir -p "$OPENCLAW_HOME/logs"
 
-openclaw config set models.providers.clawrouter.baseUrl "${CLAWROUTER_BASE_URL}/v1" 2>/dev/null || true
-openclaw config set models.providers.clawrouter.apiKey "$MODEL_API_KEY" 2>/dev/null || true
-openclaw config set models.providers.clawrouter.api "openai-completions" 2>/dev/null || true
+# 寫 openclaw.json — 嚴格按照 OpenClaw 的 schema
+# 重點：baseUrl 必須帶 /v1
+cat > "$OPENCLAW_HOME/openclaw.json" << CFGEOF
+{
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "clawrouter": {
+        "baseUrl": "${CLAWROUTER_BASE_URL}/v1",
+        "apiKey": "$MODEL_API_KEY",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "gemini-2.5-flash",
+            "name": "Gemini Flash",
+            "contextWindow": 1000000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "clawrouter/gemini-2.5-flash"
+      },
+      "models": {
+        "clawrouter/gemini-2.5-flash": {}
+      },
+      "workspace": "$OPENCLAW_HOME/workspace"
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "$TG_BOT_TOKEN",
+      "dmPolicy": "pairing",
+      "groupPolicy": "allowlist",
+      "streaming": "partial",
+      "groups": {
+        "*": { "requireMention": true }
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "bind": "loopback"
+  },
+  "meta": {
+    "lastTouchedVersion": "installer",
+    "lastTouchedAt": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+  }
+}
+CFGEOF
 
-ok "Telegram + ClawRouter 設定完成"
+ok "設定檔寫入完成"
 
-# 讓 OpenClaw 自己驗證
-echo ""
-info "OpenClaw 正在驗證設定..."
-openclaw doctor 2>&1 | grep -E "✓|✗|warn|error|ok|fail" | head -10 || true
+# 寫 SOUL.md
+cat > "$OPENCLAW_HOME/SOUL.md" << 'SOULEOF'
+# Identity
+
+You are a helpful AI assistant powered by ClawRouter.
+
+## Style
+
+- Be concise and friendly
+- Auto-detect and match the user's language
+- When speaking Chinese, use Traditional Chinese (繁體中文)
+- Give direct answers first, then explain if needed
+- Use markdown formatting for code
+SOULEOF
+
+ok "AI 人格設定完成"
 
 # 安裝 ClawRouter skill
 if command -v git &>/dev/null; then
-  OPENCLAW_HOME="${HOME}/.openclaw"
-  mkdir -p "$OPENCLAW_HOME/skills"
   TMPSKILL=$(mktemp -d)
   git clone --depth 1 "$SKILL_ORIGIN_REPO" "$TMPSKILL" >/dev/null 2>&1 && \
     cp -r "$TMPSKILL/clawrouter-skill" "$OPENCLAW_HOME/skills/" >/dev/null 2>&1 && \
@@ -292,13 +367,23 @@ if command -v git &>/dev/null; then
   rm -rf "$TMPSKILL"
 fi
 
-# 啟動
-echo ""
-info "正在啟動 Gateway..."
-openclaw gateway start 2>&1 &
-sleep 3
+# 讓 OpenClaw 驗證設定
+info "正在驗證設定..."
+openclaw doctor --fix 2>&1 | grep -E "✓|✗|warn|error|ok|fail|Approved|token|Gateway" | head -10 || true
 
-# 檢查 Telegram 連線
+# 設定 gateway mode 和 auth（如果 doctor 沒處理）
+openclaw config set gateway.mode local 2>/dev/null || true
+
+# 安裝 gateway service
+info "正在安裝 Gateway 服務..."
+openclaw gateway install 2>/dev/null || true
+
+# 啟動
+info "正在啟動 Gateway..."
+openclaw gateway start 2>/dev/null &
+sleep 5
+
+# 檢查
 openclaw channels status 2>/dev/null | head -5 || true
 
 # ═════════════════════════════════════════════════════════════
@@ -313,15 +398,19 @@ echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━
 echo ""
 echo -e "  ${BOLD}👉 現在打開 Telegram，找到你的 Bot，說一聲「你好」${NC}"
 echo ""
+echo -e "  ${DIM}首次使用 Bot 會要求配對，照它的指示跑：${NC}"
+echo -e "  ${DIM}  openclaw pairing approve telegram <CODE>${NC}"
+echo ""
 echo -e "  ${DIM}Telegram 指令：${NC}"
 echo -e "  ${DIM}  /status — 看用量   /model — 切換模型   /help — 更多指令${NC}"
 echo ""
 echo -e "  ${DIM}管理（在這台主機上）：${NC}"
 echo -e "  ${DIM}  openclaw doctor           檢查設定${NC}"
-echo -e "  ${DIM}  openclaw gateway logs     看 log${NC}"
-echo -e "  ${DIM}  openclaw gateway restart  重啟${NC}"
-echo -e "  ${DIM}  openclaw channels status  檢查連線${NC}"
-echo -e "  ${DIM}  openclaw config show      看設定${NC}"
+echo -e "  ${DIM}  openclaw logs --follow     看即時 log${NC}"
+echo -e "  ${DIM}  openclaw gateway restart   重啟${NC}"
+echo -e "  ${DIM}  openclaw channels status   檢查連線${NC}"
+echo -e "  ${DIM}  openclaw config show       看設定${NC}"
+echo -e "  ${DIM}  openclaw configure         重新設定${NC}"
 echo ""
 echo -e "  ${DIM}ClawRouter 後台：${CLAWROUTER_BASE_URL}（帳號：${CR_USERNAME}）${NC}"
 echo -e "  ${DIM}設定檔：~/.openclaw/openclaw.json${NC}"
