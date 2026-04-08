@@ -480,24 +480,47 @@ while true; do
   info "$(t cr_connecting)"
   dbg "CR_USERNAME=$CR_USERNAME  CR_REGISTER_MODE=$CR_REGISTER_MODE"
 
-  # Download bootstrap script
-  TMPDIR=$(mktemp -d)
-  BS_SCRIPT="$TMPDIR/bootstrap.mjs"
-  dbg "TMPDIR=$TMPDIR"
+  # Bootstrap: clone skill repo to get script + its dependencies
+  # Bug fixes:
+  #   1. Use BS_TMPDIR (not TMPDIR, which is a reserved env var used by mktemp)
+  #   2. Clone full repo so node_modules are available via npm install
+  #   3. Separate stderr from stdout so JSON.parse doesn't see warnings/errors
+  BS_TMPDIR=$(mktemp -d)
+  dbg "BS_TMPDIR=$BS_TMPDIR"
 
-  _curl_err=$(curl -fsSL "$BOOTSTRAP_RAW" -o "$BS_SCRIPT" 2>&1) || {
-    dbg "curl failed, trying git clone fallback"
-    echo "$_curl_err" | show_err
-    git clone --depth 1 "$SKILL_REPO" "$TMPDIR/repo" 2>&1 | show_err && \
-      cp "$TMPDIR/repo/clawrouter-skill/scripts/clawrouter-account-bootstrap.mjs" "$BS_SCRIPT" || {
-        fail "$(t cr_dl_fail)"
-        rm -rf "$TMPDIR"
-        warn "$(t cr_retry)"
-        read -r; continue
-      }
-  }
+  _bs_log=$(mktemp)
+  _bs_ok=0
 
-  BS_RESULT=$(node "$BS_SCRIPT" bootstrap \
+  # Primary: clone clawrouter-skill repo, npm install, run in-place
+  if git clone --depth 1 "$SKILL_ORIGIN_REPO" "$BS_TMPDIR/skill" >"$_bs_log" 2>&1; then
+    BS_RUN_DIR="$BS_TMPDIR/skill"
+    BS_SCRIPT="$BS_RUN_DIR/scripts/clawrouter-account-bootstrap.mjs"
+    dbg "npm install in $BS_RUN_DIR"
+    (cd "$BS_RUN_DIR" && npm install --silent >>"$_bs_log" 2>&1) || true
+    _bs_ok=1
+  else
+    # Fallback: curl single file (may still fail if script has external deps)
+    dbg "git clone failed, trying curl fallback"
+    cat "$_bs_log" | show_err
+    if curl -fsSL "$BOOTSTRAP_RAW" -o "$BS_TMPDIR/bootstrap.mjs" >>"$_bs_log" 2>&1; then
+      BS_RUN_DIR="$BS_TMPDIR"
+      BS_SCRIPT="$BS_RUN_DIR/bootstrap.mjs"
+      _bs_ok=1
+    fi
+  fi
+
+  if [ "$_bs_ok" -eq 0 ]; then
+    fail "$(t cr_dl_fail)"
+    cat "$_bs_log" | show_err
+    rm -f "$_bs_log"; rm -rf "$BS_TMPDIR"
+    warn "$(t cr_retry)"
+    read -r; continue
+  fi
+  rm -f "$_bs_log"
+
+  # Run bootstrap — stderr captured separately so stdout stays pure JSON
+  _bs_err=$(mktemp)
+  BS_RESULT=$(cd "$BS_RUN_DIR" && node "$BS_SCRIPT" bootstrap \
     --base-url "$CLAWROUTER_BASE_URL" \
     --username "$CR_USERNAME" \
     --password "$CR_PASSWORD" \
@@ -505,18 +528,19 @@ while true; do
     --aff-code "$CLAWROUTER_AFF_CODE" \
     --with-access-token false \
     --token-name "openclaw-$(date +%s)" \
-    --output json 2>&1)
+    --output json 2>"$_bs_err")
   BS_EXIT=$?
   dbg "Bootstrap exit code: $BS_EXIT"
 
   if [ $BS_EXIT -ne 0 ]; then
     fail "$(t cr_conn_fail)"
-    echo "$BS_RESULT" | head -20 | show_err
-    rm -rf "$TMPDIR"
+    cat "$_bs_err" | head -20 | show_err
+    rm -f "$_bs_err"; rm -rf "$BS_TMPDIR"
     echo ""
     warn "$(t cr_retry2)"
     read -r; echo ""; continue
   fi
+  rm -f "$_bs_err"
 
   MODEL_API_KEY=$(echo "$BS_RESULT" | node -e "
     let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
@@ -529,13 +553,13 @@ while true; do
   if [ -z "$MODEL_API_KEY" ]; then
     fail "$(t cr_apikey_fail)"
     echo "$BS_RESULT" | head -20 | show_err
-    rm -rf "$TMPDIR"
+    rm -rf "$BS_TMPDIR"
     echo ""
     warn "$(t cr_retry)"
     read -r; echo ""; continue
   fi
 
-  rm -rf "$TMPDIR"
+  rm -rf "$BS_TMPDIR"
   ok "$(t cr_ok)"
   ok "API Key: ${MODEL_API_KEY:0:12}..."
   break
